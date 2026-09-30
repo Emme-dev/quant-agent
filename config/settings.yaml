@@ -1,0 +1,10 @@
+mode: paper            # paper | live  (live stays off until Day 7 hardening)
+exchange: kraken
+quote: USD
+timeframe: 1d
+history_days: 365
+universe:
+  top_n: 20
+  min_quote_volume_24h: 20000000   # USD, liquidity filter
+  exclude_bases: [USDC, FDUSD, TUSD, USDP, DAI, BUSD, EUR, GBP]
+default_account: default

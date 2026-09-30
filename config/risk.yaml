@@ -1,0 +1,5 @@
+# Enforced in code from Day 5
+max_position_pct: 0.10
+max_gross_exposure_pct: 0.60
+daily_loss_limit_pct: 0.03
+kill_switch: false
