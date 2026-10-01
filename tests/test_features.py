@@ -46,8 +46,8 @@ def test_target_uses_future_row_by_design():
     df = _make_candles(10)
     out = build_targets(df, horizon=1)
     expected = df["close"].iloc[1] / df["close"].iloc[0] - 1
-    assert out["target_ret_1d"].iloc[0] == pytest.approx(expected)
-    assert pd.isna(out["target_ret_1d"].iloc[-1])  # last row has no future row
+    assert out["target_ret_1b"].iloc[0] == pytest.approx(expected)
+    assert pd.isna(out["target_ret_1b"].iloc[-1])  # last row has no future row
 
 
 def test_no_feature_column_is_the_target():
@@ -61,7 +61,7 @@ def test_training_table_drops_unusable_rows_only():
     df["symbol"] = "BTC/USD"
     table = make_training_table(df, FEATURE_COLUMNS, horizon=1)
     assert table[FEATURE_COLUMNS].isna().sum().sum() == 0
-    assert table["target_ret_1d"].isna().sum() == 0
+    assert table["target_ret_1b"].isna().sum() == 0
     assert len(table) < len(df)  # warm-up rows and last row were correctly dropped
 
 

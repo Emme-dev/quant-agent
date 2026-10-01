@@ -22,11 +22,13 @@ def main():
         log.warning("No candles found. Run scripts/backfill.py first.")
         return
 
-    table = make_training_table(feat, FEATURE_COLUMNS, horizon=1)
+    horizon = 1
+    table = make_training_table(feat, FEATURE_COLUMNS, horizon=horizon)
     out_path = "data/training_table.parquet"
     table.to_parquet(out_path, index=False)
     log.info("Wrote %d rows, %d symbols -> %s", len(table), table["symbol"].nunique(), out_path)
-    log.info("Target class balance:\n%s", table["target_class_1d"].value_counts(normalize=True))
+    log.info("Target class balance:\n%s",
+             table[f"target_class_{horizon}b"].value_counts(normalize=True))
 
 
 if __name__ == "__main__":

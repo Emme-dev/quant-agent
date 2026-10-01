@@ -1,7 +1,7 @@
 mode: paper            # paper | live  (live stays off until Day 7 hardening)
-exchange: kraken
+exchange: bybit
 quote: USD
-timeframe: 1d
+timeframe: 4h           # any of: 1m, 5m, 15m, 1h, 4h, 1d -- fully supported end-to-end
 history_days: 365
 universe:
   top_n: 20

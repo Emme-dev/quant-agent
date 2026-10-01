@@ -12,6 +12,15 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from ..core.logging import get_logger
+from ..core.timeframes import days_to_bars
+
+log = get_logger("ml.train")
+
+# Below this many distinct bars, no amount of scaling produces a meaningful
+# train/test split -- this is the one case that still raises.
+MIN_BARS_FOR_ANY_SPLIT = 10
+
 
 @dataclass
 class Fold:
@@ -23,25 +32,57 @@ class Fold:
 
 
 def walk_forward_splits(dates: pd.Series, n_splits: int = 5,
-                        min_train_days: int = 180, test_days: int = 30,
-                        step_days: int | None = None) -> list[Fold]:
+                        min_train_periods: int = 180, test_periods: int = 30,
+                        step_periods: int | None = None) -> list[Fold]:
     """dates: the 'date' column of the training table (may repeat per symbol).
-    Splits are computed on the sorted UNIQUE dates, then mapped back to row
-    indices, so every symbol's rows for a given date land in the same fold
-    side (never train for one symbol, test for another, on the same date)."""
-    step_days = step_days or test_days
+    min_train_periods/test_periods are counted in BARS (rows of distinct
+    timestamps), not calendar days -- on daily data those are the same thing,
+    on intraday data they are not. Callers that think in calendar days should
+    go through train_walk_forward/collect_oos_predictions below, which convert
+    for you via core/timeframes.days_to_bars.
+
+    Splits are computed on the sorted UNIQUE timestamps, then mapped back to
+    row indices, so every symbol's rows for a given timestamp land in the
+    same fold side (never train for one symbol, test for another, on the
+    same bar).
+
+    If there isn't enough history for the REQUESTED window, this scales
+    min_train_periods/test_periods down proportionally to fit what's
+    actually available and logs a warning -- it does not raise, so a thin
+    backfill degrades to weaker (but real) validation instead of crashing
+    the whole script. It only raises below MIN_BARS_FOR_ANY_SPLIT, where no
+    scaling could produce a meaningful split at all."""
     uniq = pd.Series(pd.to_datetime(dates.unique())).sort_values().reset_index(drop=True)
-    if len(uniq) < min_train_days + test_days:
-        raise ValueError(
-            f"Not enough distinct dates ({len(uniq)}) for min_train_days="
-            f"{min_train_days} + test_days={test_days}. Backfill more history."
+    n_bars = len(uniq)
+    requested_train, requested_test = min_train_periods, test_periods
+    required = min_train_periods + test_periods
+
+    if n_bars < required:
+        if n_bars < MIN_BARS_FOR_ANY_SPLIT:
+            raise ValueError(
+                f"Only {n_bars} distinct bars available -- not enough for any "
+                f"walk-forward validation (need at least {MIN_BARS_FOR_ANY_SPLIT}). "
+                f"Backfill more history."
+            )
+        scale = n_bars / required
+        min_train_periods = max(5, int(requested_train * scale))
+        test_periods = max(2, n_bars - min_train_periods)
+        log.warning(
+            "Not enough history for the requested validation window (have %d "
+            "bars, wanted %d train + %d test = %d). Scaling down to %d train + "
+            "%d test. Fewer/smaller folds means less reliable validation -- "
+            "treat results as provisional until more history accumulates.",
+            n_bars, requested_train, requested_test, required,
+            min_train_periods, test_periods,
         )
 
+    step_periods = step_periods or test_periods
+
     folds = []
-    train_end_pos = min_train_days
+    train_end_pos = min_train_periods
     while len(folds) < n_splits:
         test_start_pos = train_end_pos
-        test_end_pos = test_start_pos + test_days
+        test_end_pos = test_start_pos + test_periods
         if test_end_pos > len(uniq):
             break
         train_end_date = uniq.iloc[train_end_pos - 1]
@@ -57,8 +98,14 @@ def walk_forward_splits(dates: pd.Series, n_splits: int = 5,
         )[0]
 
         folds.append(Fold(train_idx, test_idx, train_end_date, test_start_date, test_end_date))
-        train_end_pos += step_days
+        train_end_pos += step_periods
 
+    if not folds:
+        log.warning(
+            "Walk-forward produced 0 folds even after scaling down (have %d "
+            "bars). History is right at the minimum -- backfill more soon.",
+            n_bars,
+        )
     return folds
 
 
@@ -99,21 +146,26 @@ def evaluate_fold(model, X_test, y_test) -> dict:
 
 
 def train_walk_forward(table: pd.DataFrame, feature_columns: list[str],
-                       target_col: str, n_splits: int = 5,
+                       target_col: str, timeframe: str = "1d", n_splits: int = 5,
                        min_train_days: int = 180, test_days: int = 30) -> dict:
-    """Returns {"folds": [metrics...], "final_model": <trained on ALL data>,
-    "feature_columns": [...]}. final_model is what gets deployed for tomorrow's
-    prediction -- it's allowed to use every row, since by then every row IS
-    the past relative to tomorrow."""
-    folds = walk_forward_splits(table["date"], n_splits, min_train_days, test_days)
+    """min_train_days/test_days are true CALENDAR days regardless of the bar
+    size in `table` -- converted to bar counts here via days_to_bars, so
+    'min_train_days=180' means 180 days of history whether the underlying
+    data is daily or 15-minute bars. Returns {"folds": [metrics...],
+    "final_model": <trained on ALL data>, "feature_columns": [...]}.
+    final_model is what gets deployed for the next prediction -- it's allowed
+    to use every row, since by then every row IS the past."""
+    min_train_periods = days_to_bars(min_train_days, timeframe)
+    test_periods = days_to_bars(test_days, timeframe)
+    folds = walk_forward_splits(table["date"], n_splits, min_train_periods, test_periods)
     fold_metrics = []
     for f in folds:
         tr, te = table.iloc[f.train_idx], table.iloc[f.test_idx]
         model = _fit_lgbm(tr[feature_columns], tr[target_col])
         m = evaluate_fold(model, te[feature_columns], te[target_col])
-        m["train_end_date"] = str(f.train_end_date.date())
-        m["test_start_date"] = str(f.test_start_date.date())
-        m["test_end_date"] = str(f.test_end_date.date())
+        m["train_end_date"] = str(f.train_end_date)
+        m["test_start_date"] = str(f.test_start_date)
+        m["test_end_date"] = str(f.test_end_date)
         fold_metrics.append(m)
 
     final_model = _fit_lgbm(table[feature_columns], table[target_col])
@@ -121,14 +173,17 @@ def train_walk_forward(table: pd.DataFrame, feature_columns: list[str],
 
 
 def collect_oos_predictions(table: pd.DataFrame, feature_columns: list[str],
-                            target_col: str, n_splits: int = 5,
+                            target_col: str, timeframe: str = "1d", n_splits: int = 5,
                             min_train_days: int = 180, test_days: int = 30) -> pd.DataFrame:
     """For the BACKTEST, never the in-sample final_model. Trains one model per
     fold (same as train_walk_forward) and scores only that fold's held-out
     test rows, then concatenates all folds' test predictions into one
     out-of-sample table. Every row's score comes from a model that never saw
-    that row, or any row dated after it, during training."""
-    folds = walk_forward_splits(table["date"], n_splits, min_train_days, test_days)
+    that row, or any row dated after it, during training. min_train_days/
+    test_days are calendar days, converted the same way as train_walk_forward."""
+    min_train_periods = days_to_bars(min_train_days, timeframe)
+    test_periods = days_to_bars(test_days, timeframe)
+    folds = walk_forward_splits(table["date"], n_splits, min_train_periods, test_periods)
     oos_frames = []
     for f in folds:
         tr, te = table.iloc[f.train_idx], table.iloc[f.test_idx]

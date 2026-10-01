@@ -1,5 +1,9 @@
 # Enforced in code from Day 5
+initial_capital: 10000     # paper trading starting cash, USD
 max_position_pct: 0.10
 max_gross_exposure_pct: 0.60
 daily_loss_limit_pct: 0.03
-kill_switch: false
+kill_switch: false         # manual override: set true to halt all trading
+fee_bps: 10
+slippage_bps: 5
+top_k: 3

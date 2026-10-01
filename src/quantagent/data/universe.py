@@ -1,4 +1,7 @@
+from sqlalchemy import select, distinct
+
 from ..core.config import settings
+from ..core.models import Candle
 
 
 def build_universe(ex) -> list[str]:
@@ -22,3 +25,33 @@ def build_universe(ex) -> list[str]:
             rows.append((qv, sym))
     rows.sort(reverse=True)
     return [s for _, s in rows[: uni["top_n"]]]
+
+
+def build_universe_or_fallback(ex, engine, exchange_name: str, timeframe: str,
+                               log=None) -> list[str]:
+    """For the DAILY job only (not scripts/backfill.py, which should stay
+    strict). A live ticker fetch can legitimately come back empty -- a quiet
+    liquidity moment, a transient exchange hiccup -- and halting the whole
+    day over that is worse than trading yesterday's known-good universe with
+    a clear warning logged. scripts/build_dataset.py and train_model.py are
+    unaffected; they read whatever is already in the DB either way."""
+    symbols = build_universe(ex)
+    if symbols:
+        return symbols
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(distinct(Candle.symbol)).where(
+                Candle.exchange == exchange_name, Candle.timeframe == timeframe
+            )
+        )
+        fallback = sorted(r[0] for r in rows)
+
+    if log:
+        log.warning(
+            "Live universe fetch returned 0 symbols (liquidity filter or "
+            "exchange hiccup). Falling back to %d previously-stored symbol(s). "
+            "If this repeats, check config/settings.yaml min_quote_volume_24h.",
+            len(fallback),
+        )
+    return fallback

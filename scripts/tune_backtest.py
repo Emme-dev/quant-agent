@@ -3,14 +3,16 @@ cost, or both? Tries top_k variations and a slower rebalance (score changes
 only trigger a trade every N days) on the SAME out-of-sample predictions
 used in run_backtest.py, so results are directly comparable."""
 import pandas as pd
+from quantagent.core.config import settings
 from quantagent.core.logging import get_logger
+from quantagent.core.timeframes import periods_per_year as ppy
 from quantagent.features.build import FEATURE_COLUMNS
 from quantagent.ml.train import collect_oos_predictions
 from quantagent.backtest.engine import run_backtest
 from quantagent.strategy.daily_rank import DailyRankStrategy
 
 log = get_logger("tune_backtest")
-TARGET_COL = "target_ret_1d"
+TARGET_COL = "target_ret_1b"
 
 
 class SlowRebalanceStrategy(DailyRankStrategy):
@@ -30,14 +32,16 @@ class SlowRebalanceStrategy(DailyRankStrategy):
 
 
 def main():
+    cfg = settings()
+    timeframe = cfg["timeframe"]
     table = pd.read_parquet("data/training_table.parquet")
     table["date"] = pd.to_datetime(table["date"])
-    n_dates = table["date"].nunique()
-    min_train_days = max(30, min(180, n_dates - 30))
-    test_days = max(5, min(30, (n_dates - min_train_days) // 3 or 5))
+    span_days = max(1, (table["date"].max() - table["date"].min()).days)
+    min_train_days = max(30, min(180, span_days - 30))
+    test_days = max(5, min(30, max(1, (span_days - min_train_days) // 3)))
 
     log.info("Collecting out-of-sample predictions once, reusing for all variants...")
-    oos = collect_oos_predictions(table, FEATURE_COLUMNS, TARGET_COL,
+    oos = collect_oos_predictions(table, FEATURE_COLUMNS, TARGET_COL, timeframe=timeframe,
                                   n_splits=5, min_train_days=min_train_days,
                                   test_days=test_days)
 
@@ -51,7 +55,8 @@ def main():
 
     bench_printed = False
     for name, strat in variants:
-        result = run_backtest(oos, strat, TARGET_COL, fee_bps=10, slippage_bps=5)
+        result = run_backtest(oos, strat, TARGET_COL, fee_bps=10, slippage_bps=5,
+                              periods_per_year=ppy(timeframe))
         sm = result["strategy_metrics"]
         log.info("%-30s sharpe=%6.2f cagr=%7.1f%% max_dd=%6.1f%% final=$%7.0f avg_turnover=%.2f",
                  name, sm["sharpe"], sm["cagr"] * 100, sm["max_drawdown"] * 100,

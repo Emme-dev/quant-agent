@@ -29,4 +29,4 @@ def predict_latest(feat_df: pd.DataFrame, account_id: int, run_id: int | None = 
                    ts=int(row.ts), score=float(row.score), model_version=meta["version"])
             for row in latest.itertuples()
         )
-    return latest[["symbol", "ts", "date", "score"]].sort_values("score", ascending=False)
+    return latest[["symbol", "ts", "date", "score", "close"]].sort_values("score", ascending=False)

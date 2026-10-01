@@ -28,10 +28,14 @@ def cagr(equity_curve: pd.Series, periods_per_year: int = 365) -> float:
 
 
 def summarize(equity_curve: pd.Series, daily_returns: pd.Series,
-             turnover: pd.Series | None = None) -> dict:
+             turnover: pd.Series | None = None, periods_per_year: int = 365) -> dict:
+    """periods_per_year MUST match the bar size the returns/curve are sampled
+    at -- 365 is only correct for daily bars. For any other timeframe, pass
+    core.timeframes.periods_per_year(cfg["timeframe"]), or Sharpe/CAGR will
+    be wrong by roughly (bars_per_day)x."""
     out = {
-        "sharpe": sharpe_ratio(daily_returns),
-        "cagr": cagr(equity_curve),
+        "sharpe": sharpe_ratio(daily_returns, periods_per_year),
+        "cagr": cagr(equity_curve, periods_per_year),
         "max_drawdown": max_drawdown(equity_curve),
         "final_equity": float(equity_curve.iloc[-1]),
         "n_days": int(len(equity_curve)),

@@ -20,7 +20,8 @@ from ..strategy.base import Strategy
 
 def run_backtest(oos_df: pd.DataFrame, strategy: Strategy, target_col: str,
                  fee_bps: float = 10.0, slippage_bps: float = 5.0,
-                 initial_capital: float = 10_000.0) -> dict:
+                 initial_capital: float = 10_000.0,
+                 periods_per_year: int = 365) -> dict:
     """oos_df: columns [date, symbol, score, <target_col>], one row per
     (date, symbol), out-of-sample only. Returns equity curve, daily returns,
     turnover series, per-strategy metrics, and a buy-and-hold benchmark."""
@@ -48,13 +49,14 @@ def run_backtest(oos_df: pd.DataFrame, strategy: Strategy, target_col: str,
     sim = pd.DataFrame(records).sort_values("date").reset_index(drop=True)
     sim["equity"] = initial_capital * (1 + sim["net_return"]).cumprod()
 
-    strat_metrics = summarize(sim["equity"], sim["net_return"], sim["turnover"])
+    strat_metrics = summarize(sim["equity"], sim["net_return"], sim["turnover"],
+                              periods_per_year=periods_per_year)
 
     # Benchmark: equal-weight every symbol available that day, no rebalancing
     # cost charged (a buy-and-hold basket is the honest, near-costless comparison).
     bench_ret = oos_df.groupby("date")[target_col].mean().reindex(dates)
     bench_equity = initial_capital * (1 + bench_ret.fillna(0)).cumprod()
-    bench_metrics = summarize(bench_equity, bench_ret)
+    bench_metrics = summarize(bench_equity, bench_ret, periods_per_year=periods_per_year)
 
     return {
         "sim": sim,
